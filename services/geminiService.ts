@@ -128,9 +128,30 @@ export const generateStudentSummary = async (student: Student, details: ReportDe
     FORMATTING RULES (STRICT):
     1. Address the student directly using "you".
     2. Start the comment EXACTLY with: "${student.name},"
-    3. Structure the output in TWO distinct paragraphs:
-       - Paragraph 1: Academic Analysis. Synthesize the student's scores with the specific Unit/Criterion tasks. Explain WHAT they achieved in the context of the configured criteria.
-       - Paragraph 2: Behavioral observations, summary, and encouraging closing comments.
+    3. Structure the output in TWO distinct paragraphs SEPARATED BY A BLANK LINE:
+    
+       PARAGRAPH 1 - SYNTHESIZED PERFORMANCE NARRATIVE:
+       - DO NOT list individual scores or criteria one by one
+       - DO NOT write "In Criterion A you scored X, in Criterion B you scored Y"
+       - INSTEAD: Distill and synthesize the key themes from all the data into a cohesive narrative
+       - Identify 2-3 KEY STRENGTHS or patterns across the criteria and describe them holistically
+       - Weave in behavioral observations (punctuality, attitude) naturally, not as separate bullet points
+       - Focus on the ESSENCE of their performance, not a checklist
+       - Example of BAD: "You scored 6 in Criterion A for analysis. You scored 5 in Criterion B for communication."
+       - Example of GOOD: "Your analytical thinking shone through this term, particularly in how you approached complex problems with clarity and depth."
+       
+       [MANDATORY BLANK LINE HERE]
+       
+       PARAGRAPH 2 - TERM SUMMARY & FORWARD-LOOKING:
+       - This paragraph must stand INDEPENDENTLY - it should make sense even if read alone
+       - Start with an overall term performance statement (e.g., "Overall, this has been a strong/solid/challenging term...")
+       - Briefly mention the overall achievement level without repeating paragraph 1 details
+       - Include 1-2 specific, actionable forward-looking comments or goals for next term
+       - End with genuine encouragement that feels personal, not generic
+       - This paragraph should feel like a conclusion and a bridge to the future
+    
+    DIVERSITY REQUIREMENT:
+    - Even if multiple students have similar data, write UNIQUE comments with varied vocabulary and sentence structures.
     
     Tone: Professional, personal, constructive, and encouraging.
   `;
