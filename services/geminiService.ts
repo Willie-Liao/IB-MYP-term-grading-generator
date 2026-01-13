@@ -1,0 +1,272 @@
+import { GoogleGenAI, Type, FunctionDeclaration } from "@google/genai";
+import { Student, Unit, CriterionKey } from "../types";
+
+const getClient = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+const MODEL_NAME = 'gemini-3-flash-preview';
+
+interface ReportDetails {
+  behavior?: string;
+  punctuality?: string;
+  attitude?: string;
+  progress?: string;
+  extraComments?: string;
+}
+
+// Helper to convert File to inlineData Part
+const fileToPart = async (file: File) => {
+  return new Promise<{ inlineData: { data: string; mimeType: string } }>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64String = (reader.result as string).split(',')[1];
+      resolve({
+        inlineData: {
+          data: base64String,
+          mimeType: file.type,
+        },
+      });
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+};
+
+// Helper to attempt reading text files
+const readFileContent = async (file: File): Promise<string> => {
+  try {
+    return await file.text();
+  } catch (e) {
+    return `[Attached File: ${file.name} - (Could not read content)]`;
+  }
+};
+
+const buildUnitContextParts = async (units: Unit[]): Promise<any[]> => {
+  const parts: any[] = [];
+  
+  if (!units || units.length === 0) {
+    parts.push({ text: "No specific Unit/Criterion context provided." });
+    return parts;
+  }
+
+  parts.push({ text: "ACADEMIC UNIT CONTEXT (The Course Material):\n" });
+  
+  for (const unit of units) {
+    parts.push({ text: `\n=== Unit: ${unit.title || "Untitled Unit"} ===\n` });
+    for (const key of ['A', 'B', 'C', 'D'] as CriterionKey[]) {
+      const crit = unit.criteria[key];
+      if (!crit.enabled) {
+        parts.push({ text: `Criterion ${key}: N/A (Not assessed in this unit)\n` });
+        continue;
+      }
+      
+      parts.push({ text: `Criterion ${key} Configuration (Task details for ${key}):\n  - Teacher Notes: ${crit.notes || "None"}\n` });
+
+      if (crit.file) {
+        if (crit.file.type === 'application/pdf') {
+          parts.push({ text: `  - Task Clarification File for Criterion ${key} is attached below (PDF).\n` });
+          try {
+             const filePart = await fileToPart(crit.file);
+             parts.push(filePart);
+          } catch (e) {
+             parts.push({ text: `  - [Error reading PDF file: ${crit.file.name}]\n` });
+          }
+        } else {
+          const content = await readFileContent(crit.file);
+          // Truncate text files if excessively long, though Flash handles 1M context.
+          // Let's keep it somewhat sane.
+          const truncated = content.length > 50000 ? content.substring(0, 50000) + "...(truncated)" : content;
+          parts.push({ text: `  - Task Clarification File Content: ${truncated}\n` });
+        }
+      } else {
+        parts.push({ text: `  - Task Clarification File Content: No file uploaded\n` });
+      }
+    }
+  }
+  return parts;
+};
+
+export const generateStudentSummary = async (student: Student, details: ReportDetails = {}, units: Unit[] = []): Promise<string> => {
+  const ai = getClient();
+  const unitContextParts = await buildUnitContextParts(units);
+  
+  const promptText = `
+    Role: You are a teacher writing a personal report card comment for a student.
+    
+    GRADING SCALE CONTEXT (1-8):
+    8: Exceptional
+    7: Excellent
+    6: Very Good
+    5: Good
+    4: Satisfactory
+    3: Needs Improvement
+    2: Poor
+    1: Very Poor
+
+    Student Data:
+    - Name: ${student.name}
+    - Overall Score: ${student.score}
+    - Detailed Assessment Data (Columns from Excel):
+      ${student.originalComments}
+    
+    Teacher Interview Observations:
+    - Behaviour: ${details.behavior || "N/A"}
+    - Punctuality: ${details.punctuality || "N/A"}
+    - Attitude: ${details.attitude || "N/A"}
+    - Progress: ${details.progress || "N/A"}
+    - Extra Comments: ${details.extraComments || "N/A"}
+    
+    CORE INSTRUCTION:
+    You must combine the 'Detailed Assessment Data' with the 'ACADEMIC UNIT CONTEXT' (provided above/below).
+    
+    LOGIC STEPS:
+    1. Scan the 'Detailed Assessment Data' for mentions of Criteria (e.g., "Criterion A: 6", "Crit B: 5").
+    2. For each relevant Criterion, map the student's score to the 'Task Clarification' provided in the Unit Context.
+       - IF Student got a 7 in Criterion A, AND Criterion A was about "Essay Writing", THEN describe how their essay writing was "Excellent" using specific terms from the task file.
+    3. If specific criteria scores are missing, rely on the Overall Score and Teacher Notes.
+    4. Integrate the 'Teacher Interview Observations' (behavior, attitude) naturally into the narrative.
+
+    FORMATTING RULES (STRICT):
+    1. Address the student directly using "you".
+    2. Start the comment EXACTLY with: "${student.name},"
+    3. Structure the output in TWO distinct paragraphs:
+       - Paragraph 1: Academic Analysis. Synthesize the student's scores with the specific Unit/Criterion tasks. Explain WHAT they achieved in the context of the configured criteria.
+       - Paragraph 2: Behavioral observations, summary, and encouraging closing comments.
+    
+    Tone: Professional, personal, constructive, and encouraging.
+  `;
+
+  // Combine instructions and context parts
+  const contents = {
+    parts: [
+      { text: promptText },
+      ...unitContextParts
+    ]
+  };
+
+  try {
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: contents,
+    });
+    return response.text || "Could not generate summary.";
+  } catch (error) {
+    console.error("Error generating summary:", error);
+    return "Error generating summary.";
+  }
+};
+
+// Chat Function Definitions
+const updateStudentTool: FunctionDeclaration = {
+  name: "updateStudentSummary",
+  description: "Updates the generated summary for a specific student based on user request.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      studentId: {
+        type: Type.STRING,
+        description: "The unique ID of the student to update.",
+      },
+      newSummary: {
+        type: Type.STRING,
+        description: "The newly written summary text.",
+      }
+    },
+    required: ["studentId", "newSummary"],
+  },
+};
+
+const generateReportTool: FunctionDeclaration = {
+  name: "generateSingleReport",
+  description: "Generates the term summary. Fails if interview details are missing. You MUST ask the user for these details before calling this.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      studentId: {
+        type: Type.STRING,
+        description: "The ID of the student.",
+      },
+      behavior: { type: Type.STRING, description: "User input on classroom behavior." },
+      punctuality: { type: Type.STRING, description: "User input on submission punctuality." },
+      attitude: { type: Type.STRING, description: "User input on attitude." },
+      progress: { type: Type.STRING, description: "User input on progress." },
+      extraComments: { type: Type.STRING, description: "User input on extra personal comments (or 'None')." },
+    },
+    required: ["studentId", "behavior", "punctuality", "attitude", "progress", "extraComments"],
+  },
+};
+
+export const createChatStream = async (
+  history: {role: 'user' | 'model', parts: any[]}[], 
+  msg: string, 
+  students: Student[],
+  units: Unit[],
+  onToolCall: (name: string, args: any) => Promise<any>
+) => {
+  const ai = getClient();
+  const unitContextParts = await buildUnitContextParts(units);
+
+  const unitSummary = units.map(u => u.title).join(", ");
+  
+  const systemInstructionText = `
+    You are a helpful assistant managing a student report card application.
+    
+    CONTEXT:
+    The teacher has defined the following Units: ${unitSummary || "None defined"}.
+    Detailed context (files/notes) is attached.
+
+    OPERATIONAL RULES:
+    1. You must process students ONE BY ONE.
+    2. When a file is loaded, suggest starting with the first student in the list who has status 'idle'.
+    3. MANDATORY INTERVIEW: The 'generateSingleReport' tool REQUIRES arguments for behavior, punctuality, attitude, progress, and extraComments.
+    4. You CANNOT generate a report without them. You MUST ask the user for these details for EACH student.
+    5. Ask in a conversational way: "What can you tell me about [Name]'s behavior, punctuality, and attitude?"
+    6. Once the user answers, call 'generateSingleReport'.
+    7. After generating, present the result, then ask if the user wants to adjust it OR proceed to the next student.
+    8. If the user says "Next", find the next 'idle' student and START THE INTERVIEW AGAIN for that new student.
+
+    CURRENT STUDENT LIST STATUS:
+    ${JSON.stringify(students.map(s => ({ 
+        id: s.id, 
+        name: s.name, 
+        status: s.status,
+    })))}
+  `;
+
+  const chat = ai.chats.create({
+    model: MODEL_NAME,
+    config: {
+      systemInstruction: {
+          parts: [
+              { text: systemInstructionText },
+              ...unitContextParts
+          ]
+      },
+      tools: [{ functionDeclarations: [updateStudentTool, generateReportTool] }],
+    },
+    history: history,
+  });
+
+  const result = await chat.sendMessage({ message: msg });
+  
+  // Handle tool calls
+  const functionCalls = result.functionCalls;
+  if (functionCalls && functionCalls.length > 0) {
+    const call = functionCalls[0];
+    // Execute tool via callback
+    const toolResult = await onToolCall(call.name, call.args);
+
+    // Send response back to model
+    const toolResponse = await chat.sendMessage({
+      message: [{
+        functionResponse: {
+          name: call.name,
+          id: call.id,
+          response: { result: toolResult }
+        }
+      }]
+    });
+    return toolResponse.text;
+  }
+
+  return result.text;
+};
